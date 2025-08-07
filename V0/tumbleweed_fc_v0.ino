@@ -1,16 +1,22 @@
 #include <Wire.h>
-#include <SPI.h>                  // BARO: Added for BMP280
-#include <Adafruit_BMP280.h>      // BARO: Added for BMP280
-#include <BasicLinearAlgebra.h>   // For Kalman filter matrices
+#include <SPI.h>
+#include <Adafruit_BMP280.h>
+#include <BasicLinearAlgebra.h>
+#include "FS.h"   // SD-LOG: Added for file system
+#include "SD.h"   // SD-LOG: Added for SD card
 
-// BARO: Define sensor address and create BMP object
+// --- SENSOR & ENVIRONMENT CONFIGURATION ---
 #define BMP280_ADDRESS 0x76
-Adafruit_BMP280 bmp; // use I2C interface
+// IMPORTANT: Update this with your local sea level pressure for accurate altitude.
+const float SEA_LEVEL_PRESSURE_HPA = 1025; 
+
+// --- GLOBAL OBJECTS & VARIABLES ---
+Adafruit_BMP280 bmp;
 using namespace BLA;
 
-// IMPORTANT: Update this value with your local sea level pressure in hPa for accurate altitude readings.
-// You can get this from a local weather station or online weather service.
-const float SEA_LEVEL_PRESSURE_HPA = 1021; 
+// SD-LOG: Variables for data logging
+bool isLogging = false;
+const char* dataLogFilePath = "/flight_log.csv";
 
 /* Accelerometer variables */
 float ax, ay, az;
@@ -21,14 +27,13 @@ float RateRoll, RatePitch, RateYaw;
 float RateCalRoll, RateCalPitch, RateCalYaw;
 int RateCalNum;
 
-/* 1D Kalman Filter variables*/
+/* 1D Kalman Filter (Roll/Pitch) variables */
 float kfAngleRoll = 0, kfUncertaintyAngleRoll = 2 * 2;
 float kfAnglePitch = 0, kfUncertaintyAnglePitch = 2 * 2;
-float kf1DOutput[] = {0, 0}; // {angle prediction, uncertainty of prediction}
+float kf1DOutput[] = {0, 0};
 
-/* 2D Kalman Filter variables */
-// Barometer & Kalman Filter Variables
-float AltBaro; // Will store the current sea-level altitude
+/* 2D Kalman Filter (Altitude) variables */
+float AltBaro;
 float AltKF, VelVerticalKF;
 float AccZInertial;
 
@@ -40,76 +45,135 @@ BLA::Matrix<2,2> I; BLA::Matrix<1,1> Acc;
 BLA::Matrix<2,1> K; BLA::Matrix<1,1> R;
 BLA::Matrix<1,1> L; BLA::Matrix<1,1> M;
 
-/* Barometer variables */
-float alt = 0; // BARO: Variable to store alt data
-
 /* Timer variables */
-unsigned long LoopTimer; // Changed to unsigned long for micros()
+unsigned long LoopTimer;
 
-/* Main code*/
+// --- SD-LOG: HELPER FUNCTION TO APPEND DATA TO A FILE ---
+void appendFile(fs::FS &fs, const char * path, const char * message){
+  File file = fs.open(path, FILE_APPEND);
+  if(!file){
+    Serial.println("Failed to open file for appending");
+    isLogging = false; // Stop logging if file access fails
+    return;
+  }
+  if(!file.print(message)){
+    // Don't print an error here, it would flood the serial monitor
+  }
+  file.close();
+}
+
 void setup() {
+  Serial.println(F("Setting up flight software standby..."));
+  delay(2000);
   Serial.begin(115200);
   pinMode(13, OUTPUT);
   digitalWrite(13, HIGH);
-  Wire.setClock(400000); // Set I2C clock speed to 400 kHz (fast mode)
+  Wire.setClock(400000);
   Wire.begin();
   delay(250);
+  
+  // --- SENSOR INITIALIZATION ---
   Wire.beginTransmission(0x68);
   Wire.write(0x6B);
   Wire.write(0x00);
   Wire.endTransmission();
-
-  /* Calibrate sensors */
-  Serial.println(F("Calibrating MPU-6050...")); calibrate_gryo();
-  Serial.println(F("Initializing BMP280...")); baro_setup();
   
-  /* Initialize loop timer at the end of setup */
-  LoopTimer = micros(); // Initialize loop timer at the end of setup
+  Serial.println(F("Calibrating MPU-6050..."));
+  calibrate_gryo();
+  
+  Serial.println(F("Initializing BMP280..."));
+  baro_setup();
+  
+  kf_2d_setup(); // Initialize 2D Kalman filter matrices
+
+  // --- SD-LOG: INITIALIZE SD CARD AND PREPARE LOG FILE ---
+  Serial.println("\nInitializing SD card...");
+  if(!SD.begin(5)){ // Pin 5 is the default CS pin for many ESP32 boards
+    Serial.println("Card Mount Failed. Logging will be disabled.");
+  } else {
+    Serial.println("SD card initialized.");
+    File file = SD.open(dataLogFilePath, FILE_WRITE);
+    if(file){
+      // Create a header row for our CSV file
+      file.println("Timestamp,Roll,Pitch,Altitude_KF");
+      file.close();
+      Serial.println("Log file ready.");
+    } else {
+      Serial.println("Failed to create log file.");
+    }
+  }
+
+  // --- READY FOR COMMANDS ---
+  Serial.println("\n------------------------------------");
+  Serial.println("Enter 'ON' to start logging flight data.");
+  Serial.println("Enter 'OFF' to stop logging flight data.");
+  Serial.println("------------------------------------");
+
+  LoopTimer = micros();
 }
 
 void loop() {
-  /* Get IMU data */
-  get_imu_data();
+  // --- SD-LOG: CHECK FOR SERIAL COMMANDS ---
+  if (Serial.available() > 0) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    if (command.equalsIgnoreCase("ON")) {
+      if (!isLogging) {
+        isLogging = true;
+        Serial.println("\n--- Logging STARTED ---");
+      }
+    } else if (command.equalsIgnoreCase("OFF")) {
+      if (isLogging) {
+        isLogging = false;
+        Serial.println("\n--- Logging STOPPED ---");
+      }
+    }
+  }
 
-  /* Adjust Gyro bias */
+  // --- FLIGHT CONTROL CALCULATIONS ---
+  get_imu_data();
   RateRoll -= RateCalRoll;
   RatePitch -= RateCalPitch;
   RateYaw -= RateCalYaw;
 
-  /* Calculate Pitch and Roll from Accelerometer */
   AngleRoll = atan(ay / sqrt(ax * ax + az * az)) * 180.0 / PI;
   AnglePitch = atan(-ax / sqrt(ay * ay + az * az)) * 180.0 / PI;
 
-  /* Calculate KF for Roll */
   kf_1d(kfAngleRoll, kfUncertaintyAngleRoll, RateRoll, AngleRoll);
   kfAngleRoll = kf1DOutput[0];
   kfUncertaintyAngleRoll = kf1DOutput[1];
 
-  /* Calculate KF for Pitch */
   kf_1d(kfAnglePitch, kfUncertaintyAnglePitch, RatePitch, AnglePitch);
   kfAnglePitch = kf1DOutput[0];
   kfUncertaintyAnglePitch = kf1DOutput[1];
 
-  /* Calculate the KF matrix for altitude*/
   AccZInertial = -sin(AnglePitch*(3.142/180))*ax + cos(AnglePitch*(3.142/180))*sin(AngleRoll*(3.142/180))*ay + cos(AnglePitch*(3.142/180))*cos(AngleRoll*(3.142/180))*az;   
   AccZInertial = (AccZInertial-1)*9.81;
 
-  // BARO: Read altitude from BMP280
   AltBaro = bmp.readAltitude(SEA_LEVEL_PRESSURE_HPA);
   kf_2d();
 
-  /* Print data for debugging */
+  // --- SD-LOG: LOG DATA IF ENABLED ---
+  isLogging = true;
+  if (isLogging) {
+    String dataString = String(micros()) + "," + 
+                        String(kfAngleRoll) + "," + 
+                        String(kfAnglePitch) + "," + 
+                        String(AltKF) + "\n";
+    appendFile(SD, dataLogFilePath, dataString.c_str());
+  }
+  
+  /* Print data for debugging (optional) */
   Serial.print("Roll [°] "); Serial.print(kfAngleRoll);
   Serial.print(" Pitch [°] "); Serial.print(kfAnglePitch);
-  Serial.print(" Altitude [m] "); Serial.println(AltBaro);
-
+  Serial.print(" Altitude [m] "); Serial.println(AltKF);
 
   /* Ensures 250 Hz loop cycle */
   while (micros() - LoopTimer < 4000);
   LoopTimer = micros();
 }
 
-/* Supportive Functions */
+/* --- SUPPORTIVE FUNCTIONS --- */
 void calibrate_gryo() {
   for (RateCalNum = 0; RateCalNum < 2000; RateCalNum++) {
     get_imu_data();
@@ -118,14 +182,12 @@ void calibrate_gryo() {
     RateCalYaw += RateYaw;
     delay(1);
   }
-  /* Calculate gyro bias */
   RateCalRoll /= 2000;
   RateCalPitch /= 2000;
   RateCalYaw /= 2000;
 }
 
 void get_imu_data(void) {
-  /* Gyroscope */
   Wire.beginTransmission(0x68);
   Wire.write(0x1A);
   Wire.write(0x05);
@@ -145,7 +207,6 @@ void get_imu_data(void) {
   RatePitch = (float)gy / 65.5;
   RateYaw = (float)gz / 65.5;
 
-  /* Accelerometer */
   Wire.beginTransmission(0x68);
   Wire.write(0x1C);
   Wire.write(0x10);
@@ -163,22 +224,11 @@ void get_imu_data(void) {
 }
 
 void kf_1d(float kfState, float kfUncertainty, float kfInput, float kfMeasurement) {
-  /* 1. Predict the current state of the system */
   kfState += 0.004 * kfInput;
-
-  /* 2. Calculate uncertainty*/
   kfUncertainty += 0.004 * 0.004 * 4 * 4;
-
-  /* 3. Calculate the Kalman gain*/
   float kfGain = kfUncertainty * 1 / (kfUncertainty + 3 * 3);
-
-  /* 4. Update the predicted state with the measured state through the gain*/
   kfState += kfGain * (kfMeasurement - kfState);
-
-  /* 5. Update uncertainty of predicted state */
   kfUncertainty *= (1 - kfGain);
-
-  /* 6. KF output */
   kf1DOutput[0] = kfState;
   kf1DOutput[1] = kfUncertainty;
 }
@@ -186,33 +236,25 @@ void kf_1d(float kfState, float kfUncertainty, float kfInput, float kfMeasuremen
 void baro_setup() {
   unsigned status = bmp.begin(BMP280_ADDRESS);
   if (!status) {
-    Serial.println(F("Could not find a valid BMP280 sensor, check wiring or try a different address!"));
-    while (1) delay(10); // Stop code execution if the sensor is not found.
+    Serial.println(F("Could not find a valid BMP280 sensor, check wiring!"));
+    while (1) delay(10);
   }
-
-  /* BARO: Default settings from datasheet. */
-  bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode. */
-                  Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
-                  Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
-                  Adafruit_BMP280::FILTER_X16,      /* Filtering. */
-                  Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
+  bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,
+                  Adafruit_BMP280::SAMPLING_X2,
+                  Adafruit_BMP280::SAMPLING_X16,
+                  Adafruit_BMP280::FILTER_X16,
+                  Adafruit_BMP280::STANDBY_MS_500);
 }
 
 void kf_2d_setup() {
-  // Initialize Kalman Filter Matrices
-  F = {1, 0.004,
-       0, 1};  
-  G = {0.5 * 0.004 * 0.004,
-       0.004};
+  F = {1, 0.004, 0, 1};
+  G = {0.5 * 0.004 * 0.004, 0.004};
   H = {1, 0};
-  I = {1, 0,
-       0, 1};
+  I = {1, 0, 0, 1};
   Q = G * ~G * 100.0f;
   R = {30 * 30};
-  P = {0, 0,
-       0, 0};
-  S = {0,
-       0};
+  P = {0, 0, 0, 0};
+  S = {0, 0};
 }
 
 void kf_2d() {
@@ -220,8 +262,8 @@ void kf_2d() {
   S = F * S + G * Acc;
   P = F * P * ~F + Q;
   L = H * P * ~H + R;
-  Invert(L);  // Invert L in place
-  K = P * ~H * L;   // Use inverted L
+  Invert(L);
+  K = P * ~H * L;
   M = {AltBaro};
   S = S + K * (M - H * S);
   AltKF = S(0, 0); 

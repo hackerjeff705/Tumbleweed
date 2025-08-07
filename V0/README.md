@@ -7,9 +7,11 @@ This project code serves as the core of a flight computer, designed to accuratel
 ## Features 📋
 
   * **Sensor Fusion**: Combines accelerometer, gyroscope, and barometer data for robust state estimation.
-  * **Roll & Pitch Calculation**: Provides stable angle measurements using a 1D Kalman filter.
-  * **Altitude & Vertical Velocity Calculation**: Provides stable altitude and vertical speed measurements using a 2D Kalman filter.
+  * **Roll & Pitch Estimation**: Provides stable angle measurements using a 1D Kalman filter.
+  * **Altitude & Vertical Velocity Estimation**: Provides stable altitude and vertical speed measurements using a 2D Kalman filter.
   * **Gyroscope Calibration**: Includes a startup routine to calibrate the gyroscope and remove its inherent bias.
+  * **Data Logging**: Records key flight data (angles, altitude, velocity, etc.) to a Micro SD card for post-flight analysis.
+  * **Real-time Display**: Shows critical flight information on an OLED screen for immediate feedback.
   * **Fixed Loop Rate**: Ensures consistent performance by maintaining a 250 Hz loop cycle.
 
 -----
@@ -32,6 +34,8 @@ You'll need to install the following libraries through the Arduino IDE Library M
   * `Wire.h` (included with the ESP32 core)
   * `SPI.h`
   * `Adafruit BMP280 Library`
+  * `Adafruit GFX Library`
+  * `Adafruit SSD1306`
   * `Adafruit Unified Sensor` (dependency for the BMP280 library)
   * `BasicLinearAlgebra` by Tom Stewart
 
@@ -71,12 +75,21 @@ A more complex 2D Kalman filter is used to determine altitude ($AltKF$) and vert
 
 ### 1\. Wiring
 
-Connect the MPU-6050 and BMP280 sensors to your ESP32's default I2C pins. The other components can be wired as needed for power and data.
+Connect the sensors and peripherals to your ESP32.
 
-  * **SDA** -\> GPIO 21
-  * **SCL** -\> GPIO 22
-  * **VCC** -\> 3.3V
-  * **GND** -\> GND
+**I2C Devices (MPU-6050, BMP280, SSD1306 OLED)**
+  * **SDA** -> GPIO 21
+  * **SCL** -> GPIO 22
+  * **VCC** -> 3.3V
+  * **GND** -> GND
+
+**SPI Device (Micro SD Card Reader)**
+  * **CS**   -> GPIO 5
+  * **SCK**  -> GPIO 18
+  * **MISO** -> GPIO 19
+  * **MOSI** -> GPIO 23
+  * **VCC**  -> 3.3V
+  * **GND**  -> GND
 
 ### 2\. Configure Sea Level Pressure
 
@@ -95,7 +108,9 @@ You can find your local sea-level pressure from an online weather service or a n
 1.  Install the required libraries.
 2.  Upload the sketch to your ESP32.
 3.  Keep the device **flat and stationary** for the first few seconds while the gyroscope calibrates.
-4.  Open the **Serial Monitor** at a baud rate of **115200**. You will see the filtered roll, pitch, and altitude values printed out.
+4.  Watch the OLED display for real-time data.
+5.  For detailed debugging, open the **Serial Monitor** at a baud rate of **115200**.
+6.  After use, you can retrieve the `flight_data.csv` file from the SD card for analysis.
 
 <!-- end list -->
 
