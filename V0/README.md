@@ -10,7 +10,7 @@ This project code serves as the core of a flight computer, designed to accuratel
   * **Roll & Pitch Estimation**: Provides stable angle measurements using a 1D Kalman filter.
   * **Altitude & Vertical Velocity Estimation**: Provides stable altitude and vertical speed measurements using a 2D Kalman filter.
   * **Gyroscope Calibration**: Includes a startup routine to calibrate the gyroscope and remove its inherent bias.
-  * **Data Logging**: Records key flight data (angles, altitude, velocity, etc.) to a Micro SD card for post-flight analysis.
+  * **Switch-Controlled Data Logging**: Start and stop recording key flight data (timestamp, angles, altitude) to a Micro SD card using a physical switch.
   * **Real-time Display**: Shows critical flight information on an OLED screen for immediate feedback.
   * **Fixed Loop Rate**: Ensures consistent performance by maintaining a 250 Hz loop cycle.
 
@@ -25,6 +25,7 @@ This project code serves as the core of a flight computer, designed to accuratel
   * **Barometer**: BMP280 Barometric Pressure + Temperature sensor
   * **Storage**: HW-125 Micro SD card reader
   * **Display**: OLED Display (SSD1306)
+  * **Input**: Toggle Switch
   * **Power**: BreadVolt PSU
 
 ### Required Libraries
@@ -91,6 +92,10 @@ Connect the sensors and peripherals to your ESP32.
   * **VCC**  -> 3.3V
   * **GND**  -> GND
 
+**Logging Control Switch**
+  * **Pin 1** -> GPIO 4
+  * **Pin 2** -> GND
+
 ### 2\. Configure Sea Level Pressure
 
 For accurate altitude readings from the BMP280, you **must** update the `SEA_LEVEL_PRESSURE_HPA` constant in the code.
@@ -98,7 +103,7 @@ For accurate altitude readings from the BMP280, you **must** update the `SEA_LEV
 ```cpp
 // IMPORTANT: Update this value with your local sea level pressure in hPa.
 // You can get this from a local weather station or online weather service.
-const float SEA_LEVEL_PRESSURE_HPA = 1013.25; // Example: 1021 hPa
+const float SEA_LEVEL_PRESSURE_HPA = 1027; // Example value
 ```
 
 You can find your local sea-level pressure from an online weather service or a nearby airport's METAR report.

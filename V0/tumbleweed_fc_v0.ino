@@ -2,19 +2,21 @@
 #include <SPI.h>
 #include <Adafruit_BMP280.h>
 #include <BasicLinearAlgebra.h>
-#include "FS.h"   // SD-LOG: Added for file system
-#include "SD.h"   // SD-LOG: Added for SD card
+#include "FS.h"   // Added for file system
+#include "SD.h"   // Added for SD card
 
-// --- SENSOR & ENVIRONMENT CONFIGURATION ---
+// --- HARDWARE & SENSOR CONFIGURATION ---
 #define BMP280_ADDRESS 0x76
+#define SWITCH_PIN 4 // SWITCH-MOD: GPIO pin for the logging switch. Changed to GPIO 4.
+
 // IMPORTANT: Update this with your local sea level pressure for accurate altitude.
-const float SEA_LEVEL_PRESSURE_HPA = 1025; 
+const float SEA_LEVEL_PRESSURE_HPA = 1027; 
 
 // --- GLOBAL OBJECTS & VARIABLES ---
 Adafruit_BMP280 bmp;
 using namespace BLA;
 
-// SD-LOG: Variables for data logging
+// SWITCH-MOD: This variable is now controlled by the physical switch.
 bool isLogging = false;
 const char* dataLogFilePath = "/flight_log.csv";
 
@@ -48,26 +50,15 @@ BLA::Matrix<1,1> L; BLA::Matrix<1,1> M;
 /* Timer variables */
 unsigned long LoopTimer;
 
-// --- SD-LOG: HELPER FUNCTION TO APPEND DATA TO A FILE ---
-void appendFile(fs::FS &fs, const char * path, const char * message){
-  File file = fs.open(path, FILE_APPEND);
-  if(!file){
-    Serial.println("Failed to open file for appending");
-    isLogging = false; // Stop logging if file access fails
-    return;
-  }
-  if(!file.print(message)){
-    // Don't print an error here, it would flood the serial monitor
-  }
-  file.close();
-}
 
 void setup() {
-  Serial.println(F("Setting up flight software standby..."));
-  delay(2000);
   Serial.begin(115200);
   pinMode(13, OUTPUT);
   digitalWrite(13, HIGH);
+  
+  // SWITCH-MOD: Configure the switch pin as an input with an internal pull-up resistor.
+  pinMode(SWITCH_PIN, INPUT_PULLUP);
+
   Wire.setClock(400000);
   Wire.begin();
   delay(250);
@@ -86,47 +77,31 @@ void setup() {
   
   kf_2d_setup(); // Initialize 2D Kalman filter matrices
 
-  // --- SD-LOG: INITIALIZE SD CARD AND PREPARE LOG FILE ---
+  // --- SD CARD INITIALIZATION ---
   Serial.println("\nInitializing SD card...");
-  if(!SD.begin(5)){ // Pin 5 is the default CS pin for many ESP32 boards
-    Serial.println("Card Mount Failed. Logging will be disabled.");
-  } else {
-    Serial.println("SD card initialized.");
-    File file = SD.open(dataLogFilePath, FILE_WRITE);
-    if(file){
-      // Create a header row for our CSV file
-      file.println("Timestamp,Roll,Pitch,Altitude_KF");
-      file.close();
-      Serial.println("Log file ready.");
-    } else {
-      Serial.println("Failed to create log file.");
-    }
-  }
+  sd_card_setup();
 
-  // --- READY FOR COMMANDS ---
   Serial.println("\n------------------------------------");
-  Serial.println("Enter 'ON' to start logging flight data.");
-  Serial.println("Enter 'OFF' to stop logging flight data.");
+  Serial.println("System ready. Toggle switch to control logging.");
   Serial.println("------------------------------------");
 
   LoopTimer = micros();
 }
 
 void loop() {
-  // --- SD-LOG: CHECK FOR SERIAL COMMANDS ---
-  if (Serial.available() > 0) {
-    String command = Serial.readStringUntil('\n');
-    command.trim();
-    if (command.equalsIgnoreCase("ON")) {
-      if (!isLogging) {
-        isLogging = true;
-        Serial.println("\n--- Logging STARTED ---");
-      }
-    } else if (command.equalsIgnoreCase("OFF")) {
-      if (isLogging) {
-        isLogging = false;
-        Serial.println("\n--- Logging STOPPED ---");
-      }
+  // --- SWITCH-MOD: Check the state of the physical switch ---
+  // digitalRead is LOW when the switch connects the pin to GND.
+  if (digitalRead(SWITCH_PIN) == LOW) {
+    if (!isLogging) {
+      // Announce when logging starts, just once.
+      Serial.println("--- Logging STARTED ---");
+      isLogging = true;
+    }
+  } else { // Switch is HIGH (open)
+    if (isLogging) {
+      // Announce when logging stops, just once.
+      Serial.println("--- Logging STOPPED ---");
+      isLogging = false;
     }
   }
 
@@ -153,21 +128,20 @@ void loop() {
   AltBaro = bmp.readAltitude(SEA_LEVEL_PRESSURE_HPA);
   kf_2d();
 
-  // --- SD-LOG: LOG DATA IF ENABLED ---
-  isLogging = true;
+  // --- LOG DATA IF ENABLED ---
   if (isLogging) {
     String dataString = String(micros()) + "," + 
                         String(kfAngleRoll) + "," + 
                         String(kfAnglePitch) + "," + 
                         String(AltKF) + "\n";
     appendFile(SD, dataLogFilePath, dataString.c_str());
+
+    /* Optional: Print data for live debugging */
+    Serial.print("Roll [°] "); Serial.print(kfAngleRoll);
+    Serial.print(" Pitch [°] "); Serial.print(kfAnglePitch);
+    Serial.print(" Altitude [m] "); Serial.println(AltKF);
   }
   
-  /* Print data for debugging (optional) */
-  Serial.print("Roll [°] "); Serial.print(kfAngleRoll);
-  Serial.print(" Pitch [°] "); Serial.print(kfAnglePitch);
-  Serial.print(" Altitude [m] "); Serial.println(AltKF);
-
   /* Ensures 250 Hz loop cycle */
   while (micros() - LoopTimer < 4000);
   LoopTimer = micros();
@@ -179,7 +153,7 @@ void calibrate_gryo() {
     get_imu_data();
     RateCalRoll += RateRoll;
     RateCalPitch += RatePitch;
-    RateCalYaw += RateYaw;
+    RateYaw += RateYaw;
     delay(1);
   }
   RateCalRoll /= 2000;
@@ -269,4 +243,32 @@ void kf_2d() {
   AltKF = S(0, 0); 
   VelVerticalKF = S(1, 0); 
   P = (I - K * H) * P;
+}
+
+void sd_card_setup() {
+  if(!SD.begin(5)){ // Pin 5 is the default CS pin for many ESP32 boards
+    Serial.println("Card Mount Failed. Logging will be disabled.");
+  } else {
+    Serial.println("SD card initialized.");
+    File file = SD.open(dataLogFilePath, FILE_WRITE);
+    if(file){
+      file.println("Timestamp,Roll,Pitch,Altitude_KF"); // CSV header
+      file.close();
+      Serial.println("Log file ready.");
+    } else {
+      Serial.println("Failed to create log file.");
+    }
+  }
+}
+
+void appendFile(fs::FS &fs, const char * path, const char * message){
+  File file = fs.open(path, FILE_APPEND);
+  if(!file){
+    isLogging = false; // Stop logging if file access fails
+    return;
+  }
+  if(!file.print(message)){
+    // Error message removed to keep serial monitor clean during flight
+  }
+  file.close();
 }
