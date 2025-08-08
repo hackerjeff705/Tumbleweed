@@ -4,15 +4,16 @@ This project code serves as the core of a flight computer, designed to accuratel
 
 -----
 
+
 ## Features 📋
 
-  * **Sensor Fusion**: Combines accelerometer, gyroscope, and barometer data for robust state estimation.
-  * **Roll & Pitch Estimation**: Provides stable angle measurements using a 1D Kalman filter.
-  * **Altitude & Vertical Velocity Estimation**: Provides stable altitude and vertical speed measurements using a 2D Kalman filter.
-  * **Gyroscope Calibration**: Includes a startup routine to calibrate the gyroscope and remove its inherent bias.
-  * **Switch-Controlled Data Logging**: Start and stop recording key flight data (timestamp, angles, altitude) to a Micro SD card using a physical switch.
-  * **Real-time Display**: Shows critical flight information on an OLED screen for immediate feedback.
-  * **Fixed Loop Rate**: Ensures consistent performance by maintaining a 250 Hz loop cycle.
+*   **Sensor Fusion**: Combines accelerometer, gyroscope, and barometer data for robust state estimation.
+*   **Roll & Pitch Estimation**: Provides stable angle measurements using a 1D Kalman filter.
+*   **Altitude & Vertical Velocity Estimation**: Provides stable altitude and vertical speed measurements using a 2D Kalman filter.
+*   **Gyroscope Calibration**: Includes a startup routine to calibrate the gyroscope and remove its inherent bias.
+*   **Data Logging**: Recording flight telemetry (timestamp, angles, altitude).
+*   **Real-time Display**: Displays flight information on an OLED screen for immediate feedback.
+*   **Fixed Loop Rate**: Ensures consistent performance by maintaining a 250 Hz loop cycle.
 
 -----
 
@@ -20,25 +21,25 @@ This project code serves as the core of a flight computer, designed to accuratel
 
 ### Required Hardware
 
-  * **Microcontroller**: ESP32-WROOM
-  * **IMU**: MPU-6050 6-axis Accelerometer + Gyroscope
-  * **Barometer**: BMP280 Barometric Pressure + Temperature sensor
-  * **Storage**: HW-125 Micro SD card reader
-  * **Display**: OLED Display (SSD1306)
-  * **Input**: Toggle Switch
-  * **Power**: BreadVolt PSU
+*   **Microcontroller**: ESP32-WROOM
+*   **IMU**: MPU-6050 6-axis Accelerometer + Gyroscope
+*   **Barometer**: BMP280 Barometric Pressure + Temperature sensor
+*   **Storage**: HW-125 Micro SD card reader
+*   **Display**: OLED Display (SSD1306)
+*   **Input**: Toggle Switch
+*   **Power**: BreadVolt PSU
 
 ### Required Libraries
 
 You'll need to install the following libraries through the Arduino IDE Library Manager:
 
-  * `Wire.h` (included with the ESP32 core)
-  * `SPI.h`
-  * `Adafruit BMP280 Library`
-  * `Adafruit GFX Library`
-  * `Adafruit SSD1306`
-  * `Adafruit Unified Sensor` (dependency for the BMP280 library)
-  * `BasicLinearAlgebra` by Tom Stewart
+*   `Wire.h` (included with the ESP32 core)
+*   `SPI.h`
+*   `Adafruit BMP280 Library`
+*   `Adafruit GFX Library`
+*   `Adafruit SSD1306`
+*   `Adafruit Unified Sensor` (dependency for the BMP280 library)
+*   `BasicLinearAlgebra` by Tom Stewart
 
 -----
 
@@ -46,9 +47,9 @@ You'll need to install the following libraries through the Arduino IDE Library M
 
 This code tackles a classic problem in navigation: sensors are imperfect.
 
-  * **Accelerometers** can determine angles relative to gravity, but they are very sensitive to external forces and vibration (noise).
-  * **Gyroscopes** measure the rate of rotation very well, but they suffer from **drift**, where small errors accumulate over time, causing the angle estimate to become inaccurate.
-  * **Barometers** can measure altitude based on air pressure, but the readings can be noisy and fluctuate with weather changes.
+*   **Accelerometers** can determine angles relative to gravity, but they are very sensitive to external forces and vibration (noise).
+*   **Gyroscopes** measure the rate of rotation very well, but they suffer from **drift**, where small errors accumulate over time, causing the angle estimate to become inaccurate.
+*   **Barometers** can measure altitude based on air pressure, a reading that can be noisy and fluctuate with weather changes.
 
 To get the best of all worlds, we use **sensor fusion** powered by a **Kalman Filter**.
 
@@ -74,23 +75,29 @@ A more complex 2D Kalman filter is used to determine altitude ($AltKF$) and vert
 
 ## Setup & Usage 🚀
 
-### 1\. Wiring
+### 1. Wiring
 
-Connect the sensors and peripherals to your ESP32.
+Connect the sensors and peripherals to your ESP32 as follows.
 
 **I2C Devices (MPU-6050, BMP280, SSD1306 OLED)**
-  * **SDA** -> GPIO 21
-  * **SCL** -> GPIO 22
-  * **VCC** -> 3.3V
-  * **GND** -> GND
+
+All I2C devices share the same SDA and SCL pins.
+
+| Device Pin | ESP32 Pin |
+| :--- | :--- |
+| SDA  | GPIO 21   |
+| SCL  | GPIO 22   |
+| VCC  | 3.3V      |
+| GND  | GND       |
 
 **SPI Device (Micro SD Card Reader)**
-  * **CS**   -> GPIO 5
-  * **SCK**  -> GPIO 18
-  * **MISO** -> GPIO 19
-  * **MOSI** -> GPIO 23
-  * **VCC**  -> 3.3V
-  * **GND**  -> GND
+
+| SD Reader Pin | ESP32 Pin |
+| :--- | :--- |
+| CS   | GPIO 5    |
+| SCK  | GPIO 18   |
+| MISO | GPIO 19   |
+| MOSI | GPIO
 
 **Logging Control Switch**
   * **Pin 1** -> GPIO 4

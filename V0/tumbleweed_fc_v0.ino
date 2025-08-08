@@ -2,21 +2,25 @@
 #include <SPI.h>
 #include <Adafruit_BMP280.h>
 #include <BasicLinearAlgebra.h>
-#include "FS.h"   // Added for file system
-#include "SD.h"   // Added for SD card
+#include "FS.h"
+#include "SD.h"
+#include <Adafruit_SSD1306.h> // OLED-MOD: Added for the display
 
 // --- HARDWARE & SENSOR CONFIGURATION ---
 #define BMP280_ADDRESS 0x76
-#define SWITCH_PIN 4 // SWITCH-MOD: GPIO pin for the logging switch. Changed to GPIO 4.
+#define SWITCH_PIN 4
+#define OLED_RESET -1 // OLED-MOD: Reset pin # (or -1 if sharing Arduino reset pin)
+#define SCREEN_ADDRESS 0x3C // OLED-MOD: I2C address for the 128x64 display
 
 // IMPORTANT: Update this with your local sea level pressure for accurate altitude.
 const float SEA_LEVEL_PRESSURE_HPA = 1027; 
 
 // --- GLOBAL OBJECTS & VARIABLES ---
 Adafruit_BMP280 bmp;
+// OLED-MOD: Create the display object
+Adafruit_SSD1306 display(128, 64, &Wire, OLED_RESET);
 using namespace BLA;
 
-// SWITCH-MOD: This variable is now controlled by the physical switch.
 bool isLogging = false;
 const char* dataLogFilePath = "/flight_log.csv";
 
@@ -55,31 +59,24 @@ void setup() {
   Serial.begin(115200);
   pinMode(13, OUTPUT);
   digitalWrite(13, HIGH);
-  
-  // SWITCH-MOD: Configure the switch pin as an input with an internal pull-up resistor.
   pinMode(SWITCH_PIN, INPUT_PULLUP);
 
   Wire.setClock(400000);
   Wire.begin();
   delay(250);
   
-  // --- SENSOR INITIALIZATION ---
+  // --- INITIALIZATION ---
   Wire.beginTransmission(0x68);
   Wire.write(0x6B);
   Wire.write(0x00);
   Wire.endTransmission();
   
-  Serial.println(F("Calibrating MPU-6050..."));
-  calibrate_gryo();
-  
-  Serial.println(F("Initializing BMP280..."));
-  baro_setup();
-  
-  kf_2d_setup(); // Initialize 2D Kalman filter matrices
+  Serial.println(F("Initializing OLED...")); oled_setup();
+  Serial.println(F("Calibrating MPU-6050...")); calibrate_gryo();
+  Serial.println(F("Initializing BMP280...")); baro_setup();
+  Serial.println("\nInitializing SD card..."); sd_card_setup();
 
-  // --- SD CARD INITIALIZATION ---
-  Serial.println("\nInitializing SD card...");
-  sd_card_setup();
+  kf_2d_setup();
 
   Serial.println("\n------------------------------------");
   Serial.println("System ready. Toggle switch to control logging.");
@@ -89,17 +86,14 @@ void setup() {
 }
 
 void loop() {
-  // --- SWITCH-MOD: Check the state of the physical switch ---
-  // digitalRead is LOW when the switch connects the pin to GND.
+  // Check the state of the physical switch
   if (digitalRead(SWITCH_PIN) == LOW) {
     if (!isLogging) {
-      // Announce when logging starts, just once.
       Serial.println("--- Logging STARTED ---");
       isLogging = true;
     }
-  } else { // Switch is HIGH (open)
+  } else {
     if (isLogging) {
-      // Announce when logging stops, just once.
       Serial.println("--- Logging STOPPED ---");
       isLogging = false;
     }
@@ -135,13 +129,11 @@ void loop() {
                         String(kfAnglePitch) + "," + 
                         String(AltKF) + "\n";
     appendFile(SD, dataLogFilePath, dataString.c_str());
-
-    /* Optional: Print data for live debugging */
-    Serial.print("Roll [°] "); Serial.print(kfAngleRoll);
-    Serial.print(" Pitch [°] "); Serial.print(kfAnglePitch);
-    Serial.print(" Altitude [m] "); Serial.println(AltKF);
   }
   
+  // -- UPDATE DISPLAY ---
+  updateOLED();
+
   /* Ensures 250 Hz loop cycle */
   while (micros() - LoopTimer < 4000);
   LoopTimer = micros();
@@ -246,13 +238,13 @@ void kf_2d() {
 }
 
 void sd_card_setup() {
-  if(!SD.begin(5)){ // Pin 5 is the default CS pin for many ESP32 boards
+  if(!SD.begin(5)){
     Serial.println("Card Mount Failed. Logging will be disabled.");
   } else {
     Serial.println("SD card initialized.");
     File file = SD.open(dataLogFilePath, FILE_WRITE);
     if(file){
-      file.println("Timestamp,Roll,Pitch,Altitude_KF"); // CSV header
+      file.println("Timestamp,Roll,Pitch,Altitude_KF");
       file.close();
       Serial.println("Log file ready.");
     } else {
@@ -264,11 +256,56 @@ void sd_card_setup() {
 void appendFile(fs::FS &fs, const char * path, const char * message){
   File file = fs.open(path, FILE_APPEND);
   if(!file){
-    isLogging = false; // Stop logging if file access fails
+    isLogging = false;
     return;
   }
   if(!file.print(message)){
-    // Error message removed to keep serial monitor clean during flight
+    // Error message removed
   }
   file.close();
+}
+
+void oled_setup() {
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    // Don't halt, just skip display functionality
+  } else {
+    Serial.println(F("OLED display initialized."));
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+    display.setTextSize(1);
+    display.setCursor(0,0);
+    display.println("System Booting...");
+    display.display();
+    delay(1000);
+  }
+}
+
+void updateOLED() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  
+  // Row 1
+  display.print(F("Telemetry rec: "));
+  if (isLogging) {
+    display.println(F("ON"));
+  } else {
+    display.println(F("OFF"));
+  }
+
+  // Row 2: Barometer Altitude
+  display.print(F("Baro ALT: "));
+  display.print(AltKF, 1); // Altitude from Kalman Filter with 1 decimal place
+  display.println(F("m"));
+
+  // Row 3: Roll, Pitch, and Yaw
+  display.print(F("R:"));
+  display.print(kfAngleRoll, 1);
+  display.print(F(" P:"));
+  display.print(kfAnglePitch, 1);
+  display.print(F(" Y:"));
+  display.print(RateYaw, 1); // Displaying the raw yaw rate
+
+  display.display();
 }
