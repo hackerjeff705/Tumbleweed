@@ -4,21 +4,26 @@
 #include <BasicLinearAlgebra.h>
 #include "FS.h"
 #include "SD.h"
-#include <Adafruit_SSD1306.h> // OLED-MOD: Added for the display
+#include <Adafruit_SSD1306.h>
+#include <TinyGPS++.h>
 
 // --- HARDWARE & SENSOR CONFIGURATION ---
 #define BMP280_ADDRESS 0x76
 #define SWITCH_PIN 4
-#define OLED_RESET -1 // OLED-MOD: Reset pin # (or -1 if sharing Arduino reset pin)
-#define SCREEN_ADDRESS 0x3C // OLED-MOD: I2C address for the 128x64 display
+#define OLED_RESET -1
+#define SCREEN_ADDRESS 0x3C
+#define RXD2 16
+#define TXD2 17
+#define GPS_BAUD 9600
 
 // IMPORTANT: Update this with your local sea level pressure for accurate altitude.
 const float SEA_LEVEL_PRESSURE_HPA = 1027; 
 
 // --- GLOBAL OBJECTS & VARIABLES ---
 Adafruit_BMP280 bmp;
-// OLED-MOD: Create the display object
 Adafruit_SSD1306 display(128, 64, &Wire, OLED_RESET);
+TinyGPSPlus gps;
+HardwareSerial gpsSerial(2);
 using namespace BLA;
 
 bool isLogging = false;
@@ -42,6 +47,12 @@ float kf1DOutput[] = {0, 0};
 float AltBaro;
 float AltKF, VelVerticalKF;
 float AccZInertial;
+
+// GPS-MOD: Global variables to hold the latest GPS data
+double gpsLat = 0.0, gpsLon = 0.0;
+double gpsAltitude = 0.0, gpsSpeed = 0.0;
+uint32_t gpsSatellites = 0;
+uint8_t gpsHour = 0, gpsMinute = 0, gpsSecond = 0;
 
 // Kalman Filter Matrices
 BLA::Matrix<2,2> F; BLA::Matrix<2,1> G;
@@ -74,7 +85,8 @@ void setup() {
   Serial.println(F("Initializing OLED...")); oled_setup();
   Serial.println(F("Calibrating MPU-6050...")); calibrate_gryo();
   Serial.println(F("Initializing BMP280...")); baro_setup();
-  Serial.println("\nInitializing SD card..."); sd_card_setup();
+  Serial.println(F("Initializing GPS...")); gps_setup();
+  Serial.println(F("Initializing SD card...")); sd_card_setup();
 
   kf_2d_setup();
 
@@ -99,8 +111,10 @@ void loop() {
     }
   }
 
-  // --- FLIGHT CONTROL CALCULATIONS ---
+  // --- TELEMETRY ---
+  updateGPS(); // Check for new GPS data
   get_imu_data();
+  
   RateRoll -= RateCalRoll;
   RatePitch -= RateCalPitch;
   RateYaw -= RateCalYaw;
@@ -122,12 +136,15 @@ void loop() {
   AltBaro = bmp.readAltitude(SEA_LEVEL_PRESSURE_HPA);
   kf_2d();
 
-  // --- LOG DATA IF ENABLED ---
+  // --- DATA LOGGING ---
   if (isLogging) {
     String dataString = String(micros()) + "," + 
                         String(kfAngleRoll) + "," + 
                         String(kfAnglePitch) + "," + 
-                        String(AltKF) + "\n";
+                        String(AltKF) + "," +
+                        String(gpsLat, 6) + "," +
+                        String(gpsLon, 6) + "," +
+                        String(gpsSatellites) + "\n";
     appendFile(SD, dataLogFilePath, dataString.c_str());
   }
   
@@ -244,7 +261,7 @@ void sd_card_setup() {
     Serial.println("SD card initialized.");
     File file = SD.open(dataLogFilePath, FILE_WRITE);
     if(file){
-      file.println("Timestamp,Roll,Pitch,Altitude_KF");
+      file.println("Timestamp,Roll,Pitch,Altitude_KF,Latitude,Longitude,Satellites");
       file.close();
       Serial.println("Log file ready.");
     } else {
@@ -268,7 +285,6 @@ void appendFile(fs::FS &fs, const char * path, const char * message){
 void oled_setup() {
   if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 allocation failed"));
-    // Don't halt, just skip display functionality
   } else {
     Serial.println(F("OLED display initialized."));
     display.clearDisplay();
@@ -281,31 +297,68 @@ void oled_setup() {
   }
 }
 
+void gps_setup() {
+  gpsSerial.begin(GPS_BAUD, SERIAL_8N1, RXD2, TXD2);
+}
+
+void updateGPS() {
+  while (gpsSerial.available() > 0) {
+    if (gps.encode(gpsSerial.read())) {
+      if (gps.location.isValid()) {
+        gpsLat = gps.location.lat();
+        gpsLon = gps.location.lng();
+      }
+      if (gps.altitude.isValid()) {
+        gpsAltitude = gps.altitude.meters();
+      }
+      if (gps.speed.isValid()) {
+        gpsSpeed = gps.speed.kmph();
+      }
+      if (gps.satellites.isValid()) {
+        gpsSatellites = gps.satellites.value();
+      }
+      if (gps.time.isValid()){
+        gpsHour = gps.time.hour();
+        gpsMinute = gps.time.minute();
+        gpsSecond = gps.time.second();
+      }
+    }
+  }
+}
+
 void updateOLED() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setCursor(0, 0);
   
-  // Row 1
-  display.print(F("Telemetry rec: "));
-  if (isLogging) {
-    display.println(F("ON"));
-  } else {
-    display.println(F("OFF"));
-  }
+  // Row 1: Telemetry Status
+  display.print(F("TLM rec:")); display.print(isLogging ? F("ON ") : F("OFF"));
+  display.print(F(" sats:")); display.println(gpsSatellites);
 
   // Row 2: Barometer Altitude
-  display.print(F("Baro ALT: "));
-  display.print(AltKF, 1); // Altitude from Kalman Filter with 1 decimal place
-  display.println(F("m"));
+  display.print(F("Baro ALT: ")); display.print(AltKF, 1); display.println(F("m"));
 
-  // Row 3: Roll, Pitch, and Yaw
-  display.print(F("R:"));
-  display.print(kfAngleRoll, 1);
-  display.print(F(" P:"));
-  display.print(kfAnglePitch, 1);
-  display.print(F(" Y:"));
-  display.print(RateYaw, 1); // Displaying the raw yaw rate
+  // Row 3: IMU Attitude
+  display.print(F("R:")); display.print(AngleRoll, 1);
+  display.print(F(" P:")); display.print(AnglePitch, 1);
+  display.print(F(" Y:")); display.println(RateYaw, 1);
 
+  // Row 4: GPS Coordinates
+  display.print(F("lng:")); display.print(gpsLon, 1);
+  display.print(F(" lat:")); display.println(gpsLat, 1);
+
+  // Row 5: GPS Altitude & Velocity
+  display.print(F("ALT:")); display.print(gpsAltitude, 1);
+  display.print(F("m V:")); display.print(gpsSpeed, 1); display.println(F("kmh"));
+
+  // Row 6: GPS Time
+  if (gps.time.isValid()) {
+    if (gpsHour < 10) display.print(F("0")); display.print(gpsHour); display.print(F(":"));
+    if (gpsMinute < 10) display.print(F("0")); display.print(gpsMinute); display.print(F(":"));
+    if (gpsSecond < 10) display.print(F("0")); display.print(gpsSecond);
+  } else {
+    display.print(F("--:--:--"));
+  }
+  
   display.display();
 }
