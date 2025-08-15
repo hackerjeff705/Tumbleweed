@@ -1,11 +1,8 @@
 # Tumbleweed Flight Computer V0
 
-This project code serves as the core of a flight computer, designed to accurately determine an object's orientation (roll and pitch) and altitude. It fuses data from an MPU-6050 Inertial Measurement Unit (IMU) and a BMP280 barometric pressure sensor using two separate Kalman filters. The system also integrates a GPS module to log positional data. This process results in smooth and reliable estimations that are far more accurate than using any single sensor alone.
+This project code serves as the core of a flight computer, designed to accurately determine an object's orientation (roll and pitch) and altitude. It fuses data from an MPU-6050 Inertial Measurement Unit (IMU) and a BMP280 barometric pressure sensor using two separate Kalman filters. The system also integrates a GPS module to log positional data and hosts a web server to provide a real-time telemetry interface. This process results in smooth and reliable estimations that are far more accurate than using any single sensor alone.
 
 -----
-
-
-
 
 ## Features 📋
 
@@ -14,8 +11,9 @@ This project code serves as the core of a flight computer, designed to accuratel
 *   **Altitude & Vertical Velocity Estimation**: Provides stable altitude and vertical speed measurements using a 2D Kalman filter.
 *   **GPS Integration**: Acquires and logs GPS data including coordinates, altitude, speed, and satellite count.
 *   **Gyroscope Calibration**: Includes a startup routine to calibrate the gyroscope and remove its inherent bias.
-*   **Data Logging**: Recording flight telemetry (timestamp, angles, altitude).
+*   **Data Logging**: Recording flight telemetry (timestamp, angles, altitude) to an SD card.
 *   **Real-time Display**: Displays flight information on an OLED screen for immediate feedback.
+*   **Web Interface**: Hosts a WiFi access point and web server to view real-time telemetry, update settings, and control logging from any web browser.
 *   **Fixed Loop Rate**: Ensures consistent performance by maintaining a 250 Hz loop cycle.
 
 -----
@@ -45,6 +43,9 @@ You'll need to install the following libraries through the Arduino IDE Library M
 *   `Adafruit Unified Sensor` (dependency for the BMP280 library)
 *   `TinyGPS++` by Mikal Hart
 *   `BasicLinearAlgebra` by Tom Stewart
+*   `WiFi.h` (included with the ESP32 core)
+*   `WebServer.h` (included with the ESP32 core)
+
 
 -----
 
@@ -78,6 +79,9 @@ A more complex 2D Kalman filter is used to determine altitude ($AltKF$) and vert
 
 ### GPS Data Acquisition
 The GPS module continuously sends NMEA sentences, which are parsed by the `TinyGPS++` library. The main loop polls for new, valid data (location, altitude, time, etc.) and stores it in global variables. This data is then logged to the SD card and displayed on the OLED screen alongside the sensor-fused data.
+
+### Web Interface
+The ESP32 creates a WiFi Access Point with the SSID `Tumbleweed-FC-AP`. After connecting to this network, you can navigate to `http://192.168.4.1` in a web browser to access the telemetry interface. The web page displays real-time data, allows you to update the sea level pressure for the barometer, change the log filename, and start or stop the data logging process.
 
 -----
 
@@ -127,24 +131,18 @@ All I2C devices share the same SDA and SCL pins.
 
 ### 2. Configure Sea Level Pressure
 
-For accurate altitude readings from the BMP280, you **must** update the `SEA_LEVEL_PRESSURE_HPA` constant in the code.
+For accurate altitude readings from the BMP280, you can update the sea level pressure value via the web interface. The default value is `1013.25` hPa.
 
-```cpp
-// IMPORTANT: Update this value with your local sea level pressure in hPa.
-// You can get this from a local weather station or online weather service.
-const float SEA_LEVEL_PRESSURE_HPA = 1027; // Example value
-```
-
-You can find your local sea-level pressure from an online weather service or a nearby airport's METAR report.
-
-### 3\. Upload and Run
+### 3. Upload and Run
 
 1.  Install the required libraries.
 2.  Upload the sketch to your ESP32.
 3.  Keep the device **flat and stationary** for the first few seconds while the gyroscope calibrates.
 4.  Watch the OLED display for real-time data.
 5.  For detailed debugging, open the **Serial Monitor** at a baud rate of **115200**.
-6.  After use, you can retrieve the `flight_data.csv` file from the SD card for analysis.
+6.  Connect to the `Tumbleweed-FC-AP` WiFi network (password: `12345678`) and open `http://192.168.4.1` in your browser.
+7.  Control logging via the web interface or the physical switch.
+8.  After use, you can retrieve the log file from the SD card for analysis.
 
 <!-- end list -->
 
